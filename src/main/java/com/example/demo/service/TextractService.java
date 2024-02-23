@@ -1,62 +1,65 @@
 package com.example.demo.service;
 
-import com.amazonaws.SdkClientException;
-import com.amazonaws.services.textract.AmazonTextract;
-import com.amazonaws.services.textract.model.Block;
-import com.amazonaws.services.textract.model.DetectDocumentTextRequest;
-import com.amazonaws.services.textract.model.DetectDocumentTextResult;
-import com.amazonaws.services.textract.model.Document;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
-
+import java.awt.image.BufferedImage;
+import java.io.File;
 import java.io.IOException;
-import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
+import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.textract.TextractClient;
+
 @Service
 public class TextractService {
 
-    @Autowired
-    private AmazonTextract textractClient;
-    public Map<String, String> extractFields(MultipartFile file) {
-        // Read file content into ByteBuffer
-        ByteBuffer imageBytes;
-        try {
-            imageBytes = ByteBuffer.wrap(file.getBytes());
-        } catch (IOException e) {
-            throw new RuntimeException("Error reading file", e);
-        }
+    private static final String IMAGE_OUTPUT_DIRECTORY = "F:\\java\\DemoProject\\Texttract\\text\\images";
 
-        // Create request to detect document text
-        DetectDocumentTextRequest request = new DetectDocumentTextRequest()
-                .withDocument(new Document().withBytes(imageBytes));
+    private final TextractClient textractClient;
 
-        // Call AWS Textract service
-        DetectDocumentTextResult result;
-        try {
-            result = textractClient.detectDocumentText(request);
-        } catch (SdkClientException e) {
-            throw new RuntimeException("Error communicating with AWS Textract service", e);
-        }
+    public TextractService() {
+        this.textractClient = TextractClient.builder().region(Region.US_EAST_1).build();
+    }
 
-        // Extract text blocks and parse into fields
-        Map<String, String> extractedFields = new HashMap<>();
-        List<Block> blocks = result.getBlocks();
-        for (Block block : blocks) {
-            if ("LINE".equals(block.getBlockType())) {
-                // Split block text into field name and value
-                String[] parts = block.getText().split(":", 2);
-                if (parts.length == 2) {
-                    String fieldName = parts[0].trim();
-                    String fieldValue = parts[1].trim();
-                    // Add field name and value to the map
-                    extractedFields.put(fieldName, fieldValue);
-                }
+    public  List<List<Map<String, String>>> analyzePdf(MultipartFile pdfFile) throws IOException {
+        List<String> imagePaths = new ArrayList<>();
+        List<List<Map<String, String>>> expenseListOfListOfMap = new ArrayList<>();
+        HashMap<String, String> combinedExpenseMap = new HashMap<>();
+        try (PDDocument document = PDDocument.load(pdfFile.getInputStream())) {
+            PDFRenderer pdfRenderer = new PDFRenderer(document);
+            for (int page = 0; page < document.getNumberOfPages(); ++page) {
+                BufferedImage bufferedImage = pdfRenderer.renderImageWithDPI(page, 300, ImageType.RGB);
+                String imagePath = saveImage(bufferedImage, page);
+                imagePaths.add(imagePath);
+                File imageFile = new File(imagePath);
+                KeyValueService keyValueService = new KeyValueService();
+                List<Map<String, String>> expenseMap = keyValueService.analyzeExpense(imageFile);
+                expenseListOfListOfMap.add(expenseMap);
+                //combinedExpenseMap.putAll(expenseMap);
             }
         }
-        return extractedFields;
+        return expenseListOfListOfMap;
+        //return convertMapToJson(combinedExpenseMap);
+    }
+
+    private String saveImage(BufferedImage image, int pageNumber) throws IOException {
+        String imagePath = IMAGE_OUTPUT_DIRECTORY + File.separator + "page123_" + (pageNumber + 1) + ".png";
+        File outputFile = new File(imagePath);
+        javax.imageio.ImageIO.write(image, "png", outputFile);
+        return imagePath;
+    }
+
+    private String convertMapToJson(HashMap<String, String> map) throws IOException {
+        ObjectMapper objectMapper = new ObjectMapper();
+        return objectMapper.writeValueAsString(map);
     }
 }
